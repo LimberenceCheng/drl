@@ -3,7 +3,6 @@ import numpy as np
 from common.Memory import ReplayMemory
 from common.utils import identity
 
-
 class Agent(object):
     """
     A unified agent interface:
@@ -62,11 +61,47 @@ class Agent(object):
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
 
+        # Identify the CUDA environment
         self.use_cuda = use_cuda and torch.cuda.is_available()
 
     # agent interact with the environment to collect experience
     def interact(self):
-        pass
+        if (self.max_steps is not None) and (self.n_steps >= self.max_steps):
+            self.env_state = self.env.reset()
+            self.n_steps = 0
+        states = []
+        actions = []
+        rewards = []
+        # take n steps
+        for i in range(self.roll_out_n_steps):
+            states.append(self.env_state)
+            action = self.exploration_action(self.env_state)
+            next_state, reward, done, _ = self.env.step(action)
+            done = done[0]
+            actions.append([index_to_one_hot(a, self.action_dim) for a in action])
+            rewards.append(reward)
+            final_state = next_state
+            self.env_state = next_state
+            if done:
+                self.env_state = self.env.reset()
+                break
+        # discount reward
+        if done:
+            final_r = [0.0] * self.n_agents
+            self.n_episodes += 1
+            self.episode_done = True
+        else:
+            self.episode_done = False
+            final_action = self.action(final_state)
+            one_hot_action = [index_to_one_hot(a, self.action_dim) for a in final_action]
+            final_r = self.value(final_state, one_hot_action)
+
+        rewards = np.array(rewards)
+        for agent_id in range(self.n_agents):
+            rewards[:, agent_id] = self._discount_reward(rewards[:, agent_id], final_r[agent_id])
+        rewards = rewards.tolist()
+        self.n_steps += 1
+        self.memory.push(states, actions, rewards)
 
     # take one step
     def _take_one_step(self):
